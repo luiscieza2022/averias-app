@@ -47,3 +47,74 @@ export async function listarClientes() {
 
   return { ok: true, clientes, vacio: false };
 }
+
+// ---------------------------------------------------------------------
+// HU02 - Buscar informacion del cliente (JOJO-39)
+// Permite buscar por DNI/RUC, codigo de cliente o telefono
+// Devuelve datos completos del cliente y sus últimas 5 averias.
+// ---------------------------------------------------------------------
+export async function buscarCliente(termino) {
+  await requireRol("agente");
+
+  if (!termino || !termino.trim()) {
+    return { ok: false, error: "Debe ingresar un término de búsqueda." };
+  }
+
+  const supabase = await createClient();
+  const busqueda = termino.trim();
+
+  // 1. Buscar cliente por código, documento (DNI/RUC) o teléfono
+  const { data: clientes, error: errorCliente } = await supabase
+    .from("clientes")
+    .select("id, codigo, nombre_completo, documento, telefono, correo, direccion")
+    .or(`codigo.ilike.%${busqueda}%,documento.ilike.%${busqueda}%,telefono.ilike.%${busqueda}%`)
+    .limit(1);
+
+  if (errorCliente) {
+    console.error("[buscarCliente]", errorCliente.code, errorCliente.message);
+    return { ok: false, error: "Error al consultar el cliente en la base de datos." };
+  }
+
+  if (!clientes || clientes.length === 0) {
+    return { ok: true, cliente: null, vacio: true, mensaje: "Cliente no encontrado" };
+  }
+
+  const cliente = clientes[0];
+
+  // 2. Obtener el historial de las últimas 5 averías (código, fecha, tipo y estado)
+  const { data: averias, error: errorAverias } = await supabase
+    .from("averias")
+    .select(`
+      id,
+      codigo,
+      fecha_reporte,
+      estado,
+      tipos_averia (
+        nombre
+      )
+    `)
+    .eq("cliente_id", cliente.id)
+    .order("fecha_reporte", { ascending: false })
+    .limit(5);
+
+  if (errorAverias) {
+    console.error("[buscarCliente - averias]", errorAverias.code, errorAverias.message);
+  }
+
+  const historialAverias = (averias || []).map((av) => ({
+    id: av.id,
+    codigo: av.codigo,
+    fecha: av.fecha_reporte,
+    tipo: av.tipos_averia?.nombre || "No especificado",
+    estado: av.estado
+  }));
+
+  return {
+    ok: true,
+    vacio: false,
+    cliente: {
+      ...cliente,
+      averias: historialAverias
+    }
+  };
+}
